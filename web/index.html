@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reactive DCA Guard — Dashboard (Testnet)</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #0b0e14; color: #e6e9f0; line-height: 1.5; }
+  header, main, footer { max-width: 920px; margin: 0 auto; padding: 0 16px; }
+  header { padding-top: 28px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 28px 0 10px; border-bottom: 1px solid #263042; padding-bottom: 6px; }
+  p.sub { color: #9aa7bd; margin: 0 0 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .card { background: #141a26; border: 1px solid #263042; border-radius: 12px; padding: 14px 16px; }
+  .card .label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #9aa7bd; }
+  .card .value { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .card .note { font-size: 13px; color: #9aa7bd; margin-top: 2px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+  .badge.ok { background: #123f2a; color: #5fd68f; }
+  .badge.warn { background: #4a2f10; color: #f5b45a; }
+  .badge.bad { background: #4a1717; color: #f28b82; }
+  .badge.info { background: #1d3350; color: #8ab4f8; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #263042; font-variant-numeric: tabular-nums; }
+  th { color: #9aa7bd; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  a { color: #8ab4f8; }
+  a:hover { text-decoration: underline; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
+  button { background: #2b6cb0; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px;
+    font-size: 14px; font-weight: 600; cursor: pointer; margin: 4px 8px 4px 0; }
+  button:disabled { background: #2a3345; color: #7c8aa5; cursor: not-allowed; }
+  button.danger { background: #8c2f2f; }
+  #status { font-size: 13px; color: #9aa7bd; }
+  #error { display: none; background: #4a1717; border: 1px solid #7a2b2b; border-radius: 8px;
+    padding: 10px 14px; margin-top: 12px; font-size: 14px; }
+  footer { color: #7c8aa5; font-size: 13px; padding: 32px 16px 40px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .spacer { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡️ Reactive DCA Guard</h1>
+  <p class="sub">Auto-DCA + circuit breaker di atas Reactive Network — <strong>testnet only</strong>
+  (Lasna × Base Sepolia). Semua angka di halaman ini dibaca <strong>live dari RPC</strong>,
+  bukan hardcode. Track: <em>Set It and Forget It</em> — Reactive Omni Buildathon.</p>
+  <div class="row">
+    <span id="status">Memuat data on-chain…</span>
+    <span class="spacer"></span>
+    <button id="refreshBtn" type="button">↻ Refresh</button>
+  </div>
+  <div id="error"></div>
+</header>
+
+<main>
+  <h2>Harga &amp; Guard</h2>
+  <div class="grid">
+    <div class="card"><div class="label">Harga saat ini (DCAT / WETH)</div>
+      <div class="value" id="curPrice">—</div><div class="note" id="curChange">—</div></div>
+    <div class="card"><div class="label">Harga referensi (tick 1)</div>
+      <div class="value" id="refPrice">—</div><div class="note">ditetapkan tick CRON pertama</div></div>
+    <div class="card"><div class="label">Band ±30%</div>
+      <div class="value" id="band" style="font-size:18px">—</div>
+      <div class="note" id="bandNote">—</div></div>
+    <div class="card"><div class="label">Status</div>
+      <div class="value" style="font-size:18px"><span class="badge info" id="pausedBadge">—</span>
+      <span class="badge info" id="cronBadge">—</span></div>
+      <div class="note" id="tickNote">—</div></div>
+  </div>
+
+  <h2>Riwayat Keputusan (CRON ticks)</h2>
+  <p class="sub">Dibaca dari <span class="mono">decisionHistory</span> di kontrak Reactive (Lasna).
+  BUY = harga dalam band &amp; perubahan &lt; 20% · SKIP = guard menghentikan pembelian.</p>
+  <table>
+    <thead><tr><th>Tick</th><th>Harga (DCAT/WETH)</th><th>Δ vs tick lalu</th><th>Keputusan</th><th>Alasan</th></tr></thead>
+    <tbody id="decisions"><tr><td colspan="5">Memuat…</td></tr></tbody>
+  </table>
+
+  <h2>Pembelian Tereksekusi (callback Base Sepolia)</h2>
+  <p class="sub">Event <span class="mono">DcaBuy</span> — swap nyata WETH → DCAT di pair MiniAMM.
+  Total live dari kontrak: <strong id="buyTotal">—</strong></p>
+  <table>
+    <thead><tr><th>#</th><th>DCAT diterima</th><th>WETH masuk</th><th>Harga eksekusi</th><th>Tx</th></tr></thead>
+    <tbody id="buys"><tr><td colspan="5">Memuat…</td></tr></tbody>
+  </table>
+
+  <h2>Saldo Callback (Base Sepolia)</h2>
+  <div class="grid">
+    <div class="card"><div class="label">ETH</div><div class="value" id="cbEth">—</div></div>
+    <div class="card"><div class="label">WETH</div><div class="value" id="cbWeth">—</div></div>
+    <div class="card"><div class="label">DCAT</div><div class="value" id="cbDcat">—</div></div>
+    <div class="card"><div class="label">Buy count / total dibeli</div>
+      <div class="value" id="cbBuys">—</div><div class="note" id="cbSpent">—</div></div>
+  </div>
+
+  <h2>Pair WETH / DCAT (MiniAMM)</h2>
+  <div class="grid">
+    <div class="card"><div class="label">Reserve WETH</div><div class="value" id="res0">—</div></div>
+    <div class="card"><div class="label">Reserve DCAT</div><div class="value" id="res1">—</div></div>
+    <div class="card"><div class="label">Harga dari reserve</div><div class="value" id="pairPrice">—</div>
+      <div class="note">harus cocok dengan harga saat ini di atas</div></div>
+  </div>
+
+  <h2>Kontrol Owner (manual, butuh wallet)</h2>
+  <p class="sub">Tombol di bawah <strong>tidak mengirim transaksi apa pun otomatis</strong> — hanya saat
+  owner mengklik dan mengonfirmasi di wallet-nya (jaringan Lasna, chain 5318007).
+  Tanpa wallet terpasang, tombol nonaktif.</p>
+  <div class="row">
+    <button id="connectBtn" type="button">Connect Wallet</button>
+    <span id="walletInfo" class="mono">wallet belum terhubung</span>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button id="pauseBtn" type="button" class="danger" disabled>Pause</button>
+    <button id="unpauseBtn" type="button" disabled>Unpause</button>
+    <button id="subBtn" type="button" disabled>Subscribe CRON</button>
+    <button id="unsubBtn" type="button" disabled>Unsubscribe CRON</button>
+  </div>
+  <p class="sub" id="ownerNote">Owner kontrak: <span class="mono" id="ownerAddr">—</span></p>
+  <p class="sub" id="txResult"></p>
+
+  <h2>Kontrak &amp; Bukti</h2>
+  <ul>
+    <li>Reactive (Lasna 5318007): <a class="mono" href="https://lasna.reactscan.net/address/0x3669eead32953566cccddd0517c557d4a19d62cb" target="_blank" rel="noopener">0x3669eead32953566cccddd0517c557d4a19d62cb</a></li>
+    <li>Callback (Base Sepolia 84532): <a class="mono" href="https://sepolia.basescan.org/address/0x4f701a8b20c28ec401dea6062969c9ae14df377f" target="_blank" rel="noopener">0x4f701a8b20c28ec401dea6062969c9ae14df377f</a></li>
+    <li>Pair WETH/DCAT: <a class="mono" href="https://sepolia.basescan.org/address/0xeb1033094a4716d360a0828cf598cb09adbcf084" target="_blank" rel="noopener">0xeb1033094a4716d360a0828cf598cb09adbcf084</a></li>
+    <li>DCAT: <a class="mono" href="https://sepolia.basescan.org/address/0x7350783c525c902f5dc2e8ddf4170978840269c2" target="_blank" rel="noopener">0x7350783c525c902f5dc2e8ddf4170978840269c2</a></li>
+    <li>WETH: <a class="mono" href="https://sepolia.basescan.org/address/0x4200000000000000000000000000000000000006" target="_blank" rel="noopener">0x4200000000000000000000000000000000000006</a></li>
+    <li>Dokumen bukti E2E: <span class="mono">SUBMIT-READY-FASE-2.md</span> + <span class="mono">DEPLOY-LOG-FASE-1.md</span> (§ Fase 2) di repo.</li>
+    <li>Repo: lokal <span class="mono">~/workspace/reactive-dca-guard/</span> (belum di-push ke GitHub — TODO submit-prep).</li>
+  </ul>
+</main>
+
+<footer>
+  Reactive DCA Guard — Fase 2, testnet. Harga = DCAT per WETH (1e18-scaled on-chain).
+  CRON di-unsubscribe setelah E2E supaya tidak bakar lREACT; subscribe ulang via tombol owner di atas.
+  Data diperbarui tiap refresh / 60 detik otomatis.
+</footer>
+
+<script>
+"use strict";
+// ---- Config (alamat + RPC publik testnet) ----
+const LASNA_RPC = "https://lasna-rpc.rnk.dev";
+const BASE_RPC  = "https://sepolia.base.org";
+const RC   = "0x3669eead32953566cccddd0517c557d4a19d62cb";
+const CB   = "0x4f701a8b20c28ec401dea6062969c9ae14df377f";
+const PAIR = "0xeb1033094a4716d360a0828cf598cb09adbcf084";
+const WETH = "0x4200000000000000000000000000000000000006";
+const DCAT = "0x7350783c525c902f5dc2e8ddf4170978840269c2";
+const LASNA_CHAIN_HEX = "0x512577"; // 5318007
+// Tx hash 4 swap DcaBuy (E2E, terverifikasi) — dipakai untuk mengambil event log per blok.
+const BUY_TXS = [
+  "0x45b3b39dff7c924a149084d3764525c68d4afc51f60455d1e66e85d18d7603c2",
+  "0x2d7af4fe85dc347ef3eb76c37457a92855691fac530f258de4b95cc72e125325",
+  "0x6558164a25aa738d5798ec403a998813564db6a010f3d4184178e8f44bb51172",
+  "0xd64ceb43831b6268e18223f45a1d7d7badec74027efaf592f70e296ab28109f7",
+];
+const DCABUY_TOPIC = "0x05d67b80f87a53a1ed7d3b16e47580a1d116de984df8523ba4b19384f7c68ba3"; // keccak DcaBuy(address,uint256,uint256,uint256,uint256)
+// Selectors (cast sig, dari src/*.sol)
+const S = {
+  referencePrice: "0x59414bf2", currentPrice: "0x9d1b464a", prevPrice: "0x46051f34",
+  cronTicks: "0x0ba10b24", decisionCount: "0x100b63cb", paused: "0x5c975abb",
+  cronSubscribed: "0xc0d062c6", buyAmount: "0x1fa70531",
+  decisionHistory: "0x276c3467", lastDecisionReason: "0xc9b898ca", owner: "0x8da5cb5b",
+  buyCount: "0xca703075", totalDcatBought: "0x894adcab", totalWethSpent: "0x1e2f85c0",
+  lastPrice: "0x053f14da", balanceOf: "0x70a08231", getReserves: "0x0902f1ac",
+  pause: "0x8456cb59", unpause: "0x3f4ba83a", subscribeCron: "0x3b180520", unsubscribeCron: "0xf9454041",
+};
+
+// ---- JSON-RPC helpers (tanpa dependensi) ----
+async function rpc(url, method, params) {
+  const r = await fetch(url, { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+  const j = await r.json();
+  if (j.error) throw new Error(method + ": " + j.error.message);
+  return j.result;
+}
+const hexToBig = h => BigInt(h);
+async function call(url, to, data) {
+  return await rpc(url, "eth_call", [{ to, data }, "latest"]);
+}
+const uintOf = async (url, to, sel) => hexToBig(await call(url, to, sel));
+function encAddr(a) { return a.toLowerCase().replace(/^0x/, "").padStart(64, "0"); }
+function encUint(n) { return BigInt(n).toString(16).padStart(64, "0"); }
+// Decode decisionHistory(i) -> (tick, price, decision, reason)
+function decodeDecision(hex) {
+  const b = hex.replace(/^0x/, "");
+  const word = i => BigInt("0x" + b.slice(i * 64, i * 64 + 64));
+  const tick = word(0), price = word(1), decision = Number(word(2));
+  const hexOff = Number(word(3)) * 2; // byte offset -> hex-char offset
+  const len = Number(BigInt("0x" + b.slice(hexOff, hexOff + 64)));
+  let reason = "";
+  for (let i = 0; i < len; i++)
+    reason += String.fromCharCode(parseInt(b.slice(hexOff + 64 + i * 2, hexOff + 66 + i * 2), 16));
+  return { tick, price, decision, reason };
+}
+// Decode DcaBuy log data (amountIn, amountOut, execPrice, timestamp)
+function decodeBuyLog(dataHex) {
+  const b = dataHex.replace(/^0x/, "");
+  const w = i => BigInt("0x" + b.slice(i * 64, i * 64 + 64));
+  return { amountIn: w(0), amountOut: w(1), execPrice: w(2), ts: w(3) };
+}
+// ---- Formatting ----
+const E18 = 10n ** 18n;
+// Round a 1e18-scaled value to `dec` decimals -> [intPart, fracString]
+function splitRounded(v, dec) {
+  const scale = 10n ** BigInt(dec);
+  const rounded = (v * scale + E18 / 2n) / E18; // round-half-up
+  return [rounded / scale, (rounded % scale).toString().padStart(dec, "0")];
+}
+function fmtPrice(v) { // 1e18-scaled -> "1.044.292,09"
+  const [i, f] = splitRounded(v, 2);
+  return i.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") + "," + f;
+}
+function fmtTok(v, dec = 4) { // wei -> token, dec desimal
+  const [i, f] = splitRounded(v, dec);
+  return i.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") + "," + f;
+}
+function fmtPct(num, den) { // (num-den)/den * 100, 2 desimal
+  if (den === 0n) return "—";
+  const bp = (num - den) * 10000n / den; // basis points x100
+  const sign = bp < 0n ? "−" : "+";
+  const a = bp < 0n ? -bp : bp;
+  return sign + (a / 100n).toString() + "," + (a % 100n).toString().padStart(2, "0") + "%";
+}
+const $ = id => document.getElementById(id);
+const shortTx = h => h.slice(0, 10) + "…" + h.slice(-8);
+
+// ---- Load utama ----
+async function load() {
+  $("status").textContent = "Memuat data on-chain…";
+  $("error").style.display = "none";
+  try {
+    const [ref, cur, ticks, nDec, paused, cronSub, buyAmt, owner] = await Promise.all([
+      uintOf(LASNA_RPC, RC, S.referencePrice), uintOf(LASNA_RPC, RC, S.currentPrice),
+      uintOf(LASNA_RPC, RC, S.cronTicks), uintOf(LASNA_RPC, RC, S.decisionCount),
+      call(LASNA_RPC, RC, S.paused).then(h => hexToBig(h) !== 0n),
+      call(LASNA_RPC, RC, S.cronSubscribed).then(h => hexToBig(h) !== 0n),
+      uintOf(LASNA_RPC, RC, S.buyAmount),
+      call(LASNA_RPC, RC, S.owner).then(h => "0x" + h.slice(-40)),
+    ]);
+    const floor = ref * 70n / 100n, ceil = ref * 130n / 100n;
+    $("curPrice").textContent = fmtPrice(cur) + " DCAT";
+    $("curChange").textContent = fmtPct(cur, ref) + " vs referensi · buy amount " + fmtTok(buyAmt, 3) + " WETH";
+    $("refPrice").textContent = fmtPrice(ref) + " DCAT";
+    $("band").textContent = fmtPrice(floor) + " – " + fmtPrice(ceil);
+    const inBand = cur >= floor && cur <= ceil;
+    $("bandNote").textContent = inBand ? "harga saat ini DI DALAM band" : "harga saat ini DI LUAR band (di bawah lantai)";
+    $("bandNote").style.color = inBand ? "#5fd68f" : "#f28b82";
+    const pb = $("pausedBadge");
+    pb.textContent = paused ? "⏸ PAUSED" : "▶ AKTIF";
+    pb.className = "badge " + (paused ? "bad" : "ok");
+    const cb2 = $("cronBadge");
+    cb2.textContent = cronSub ? "CRON ON" : "CRON OFF";
+    cb2.className = "badge " + (cronSub ? "ok" : "warn");
+    $("tickNote").textContent = "cronTicks " + ticks + " · keputusan " + nDec +
+      " · CRON OFF = di-unsubscribe setelah E2E (hemat lREACT)";
+    $("ownerAddr").textContent = owner;
+
+    // Riwayat keputusan
+    const rows = [];
+    for (let i = 0; i < Number(nDec); i++) {
+      const raw = await call(LASNA_RPC, RC, S.decisionHistory + encUint(i));
+      rows.push(decodeDecision(raw));
+    }
+    $("decisions").innerHTML = rows.map((d, i) => {
+      const prev = i > 0 ? rows[i - 1].price : null;
+      const chg = prev === null ? "— (ref set)" : fmtPct(d.price, prev);
+      const badge = d.decision === 1
+        ? '<span class="badge ok">BUY</span>' : '<span class="badge bad">SKIP</span>';
+      return `<tr><td>${d.tick}</td><td>${fmtPrice(d.price)}</td><td>${chg}</td><td>${badge}</td><td>${d.reason}</td></tr>`;
+    }).join("");
+
+    // Callback + pair (Base Sepolia)
+    const [buyCount, totDcat, totWeth, lastP, cbEth, cbWeth, cbDcat, res] = await Promise.all([
+      uintOf(BASE_RPC, CB, S.buyCount), uintOf(BASE_RPC, CB, S.totalDcatBought),
+      uintOf(BASE_RPC, CB, S.totalWethSpent), uintOf(BASE_RPC, CB, S.lastPrice),
+      rpc(BASE_RPC, "eth_getBalance", [CB, "latest"]).then(hexToBig),
+      uintOf(BASE_RPC, WETH, S.balanceOf + encAddr(CB)),
+      uintOf(BASE_RPC, DCAT, S.balanceOf + encAddr(CB)),
+      call(BASE_RPC, PAIR, S.getReserves).then(h => {
+        const b = h.replace(/^0x/, "");
+        return { r0: BigInt("0x" + b.slice(0, 64)), r1: BigInt("0x" + b.slice(64, 128)) };
+      }),
+    ]);
+    $("buyTotal").textContent = fmtTok(totDcat) + " DCAT dari " + fmtTok(totWeth, 3) + " WETH (" + buyCount + " buy)";
+    $("cbEth").textContent = fmtTok(cbEth, 7) + " ETH";
+    $("cbWeth").textContent = fmtTok(cbWeth, 3) + " WETH";
+    $("cbDcat").textContent = fmtTok(cbDcat) + " DCAT";
+    $("cbBuys").textContent = buyCount + " buy";
+    $("cbSpent").textContent = "total " + fmtTok(totDcat) + " DCAT · " + fmtTok(totWeth, 3) + " WETH · lastPrice " + fmtPrice(lastP);
+    $("res0").textContent = fmtTok(res.r0, 7) + " WETH";
+    $("res1").textContent = fmtTok(res.r1, 3) + " DCAT";
+    $("pairPrice").textContent = fmtPrice(res.r0 === 0n ? 0n : res.r1 * E18 / res.r0) + " DCAT";
+
+    // Per-buy dari event log (receipt -> blok -> getLogs 1 blok)
+    const buyRows = [];
+    for (let i = 0; i < BUY_TXS.length; i++) {
+      const tx = BUY_TXS[i];
+      try {
+        const rcpt = await rpc(BASE_RPC, "eth_getTransactionReceipt", [tx]);
+        const blk = rcpt.blockNumber;
+        const logs = await rpc(BASE_RPC, "eth_getLogs", [{ address: CB, fromBlock: blk, toBlock: blk, topics: [DCABUY_TOPIC] }]);
+        if (!logs.length) throw new Error("log DcaBuy tidak ketemu di blok " + parseInt(blk, 16));
+        const d = decodeBuyLog(logs[0].data);
+        buyRows.push(`<tr><td>${i + 1}</td><td>${fmtTok(d.amountOut)}</td><td>${fmtTok(d.amountIn, 3)}</td><td>${fmtPrice(d.execPrice)}</td><td><a class="mono" href="https://sepolia.basescan.org/tx/${tx}" target="_blank" rel="noopener">${shortTx(tx)}</a></td></tr>`);
+      } catch (e) {
+        buyRows.push(`<tr><td>${i + 1}</td><td colspan="3">log gagal dimuat (${e.message})</td><td><a class="mono" href="https://sepolia.basescan.org/tx/${tx}" target="_blank" rel="noopener">${shortTx(tx)}</a></td></tr>`);
+      }
+    }
+    $("buys").innerHTML = buyRows.join("");
+    $("status").textContent = "Live ✓ diperbarui " + new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) + " WIB";
+  } catch (e) {
+    const el = $("error");
+    el.style.display = "block";
+    el.textContent = "Gagal memuat data on-chain: " + e.message + " — coba Refresh.";
+    $("status").textContent = "Gagal memuat (lihat pesan error).";
+  }
+}
+
+// ---- Owner controls (manual, via injected wallet; tanpa wallet = nonaktif) ----
+let account = null;
+async function refreshWalletUI() {
+  const has = typeof window.ethereum !== "undefined";
+  $("connectBtn").disabled = !has;
+  if (!has) {
+    $("walletInfo").textContent = "tidak ada wallet terpasang (MetaMask dsb.) — tombol owner nonaktif";
+    return;
+  }
+  $("walletInfo").textContent = account ? ("terhubung: " + account) : "wallet terdeteksi — klik Connect Wallet";
+  const en = !!account;
+  ["pauseBtn", "unpauseBtn", "subBtn", "unsubBtn"].forEach(id => $(id).disabled = !en);
+}
+$("connectBtn").addEventListener("click", async () => {
+  try {
+    const accs = await window.ethereum.request({ method: "eth_requestAccounts" });
+    account = accs[0];
+    const chain = await window.ethereum.request({ method: "eth_chainId" });
+    if (chain !== LASNA_CHAIN_HEX)
+      $("txResult").textContent = "Wallet terhubung, tapi chain aktif bukan Lasna (" + chain + ") — pindah ke Lasna (5318007) sebelum klik tombol owner.";
+    await refreshWalletUI();
+  } catch (e) { $("txResult").textContent = "Connect gagal: " + (e.message || e); }
+});
+async function sendOwner(sel, label) {
+  if (!account) return;
+  $("txResult").textContent = label + "… konfirmasi di wallet (Lasna).";
+  try {
+    const chain = await window.ethereum.request({ method: "eth_chainId" });
+    if (chain !== LASNA_CHAIN_HEX) {
+      try {
+        await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: LASNA_CHAIN_HEX }] });
+      } catch (e) { $("txResult").textContent = "Pindah chain ke Lasna dulu (chainId 5318007). " + (e.message || e); return; }
+    }
+    const txHash = await window.ethereum.request({ method: "eth_sendTransaction",
+      params: [{ from: account, to: RC, data: sel }] });
+    $("txResult").innerHTML = label + " tx terkirim: <a class='mono' href='https://lasna.reactscan.net/tx/" + txHash + "' target='_blank' rel='noopener'>" + shortTx(txHash) + "</a> — tunggu konfirmasi, lalu Refresh.";
+    setTimeout(load, 15000);
+  } catch (e) { $("txResult").textContent = label + " gagal/dibatalkan: " + (e.message || e); }
+}
+$("pauseBtn").addEventListener("click", () => sendOwner(S.pause, "Pause"));
+$("unpauseBtn").addEventListener("click", () => sendOwner(S.unpause, "Unpause"));
+$("subBtn").addEventListener("click", () => sendOwner(S.subscribeCron, "Subscribe CRON"));
+$("unsubBtn").addEventListener("click", () => sendOwner(S.unsubscribeCron, "Unsubscribe CRON"));
+$("refreshBtn").addEventListener("click", load);
+if (typeof window.ethereum !== "undefined" && window.ethereum.selectedAddress)
+  account = window.ethereum.selectedAddress;
+refreshWalletUI();
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
